@@ -1,21 +1,23 @@
 #!/usr/bin/env python3
 """
-Experiment 2: power extension of Experiment 1, plus DR-xKTE.
+Experiment 2: power study with DR-xKTE and an equal-law null.
 
-This is deliberately the same design as Experiment 1:
-  - same confounded observational DGP under the null;
+This keeps the same observational structure as Experiment 1:
+  - same confounded X -> A mechanism;
   - same three-way split I_eta / I_tr / I_te;
   - same plug-in nuisances for ODR-ME, IPW-ME, and DM-ME;
   - same finite-location baselines.
 
-The only change is that we add alternatives to the potential-outcome law and
-report empirical rejection rates as power curves.  We also add DR-xKTE/AIPW-xKTE
-as the global causal kernel baseline, using the same estimated propensity from
-I_eta.  Fawkes is omitted because its permutation null is too slow for this
-laptop-scale experiment.
+Unlike Experiment 1, the null here is not a sharp null. Under setting="null",
+the two interventional laws are still equal, but Y(0) and Y(1) are generated
+with independent arm-specific noise draws. This script therefore combines an
+equal-law causal null, several alternatives, and DR-xKTE/AIPW-xKTE as the
+global causal kernel baseline. Fawkes is omitted because its permutation null
+is too slow for this laptop-scale experiment.
 
 The script expects exp1_calibration_dr_me_plugin.py to be in the same directory
-or on PYTHONPATH.  This keeps Experiment 2 exactly tied to the Experiment 1 code.
+or on PYTHONPATH. This keeps Experiment 2 tied to the same scalar DR-ME core,
+even though its null is not identical to Experiment 1.
 
 Recommended run:
     python exp2_power_exp1_extension.py \
@@ -35,7 +37,6 @@ import os
 import sys
 import time
 from multiprocessing import Pool, cpu_count
-from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -43,6 +44,7 @@ import scipy.stats as st
 import scipy.linalg as la
 from scipy.special import expit
 from sklearn.metrics import pairwise_distances, pairwise_kernels
+from latex_tables import tex_float, write_booktabs_table
 from repo_paths import results_dir
 
 # Import the exact Experiment-1 implementation.
@@ -83,18 +85,19 @@ SETTING_LABELS = {
 
 
 def simulate_observational(
-    n: int,
-    seed: int,
-    setting: str,
-    p: int = 5,
-    sigma_y: float = 1.0,
-    effect: Optional[float] = None,
-    bump_prob: float = 0.12,
+    n,
+    seed,
+    setting,
+    p=5,
+    sigma_y=1.0,
+    effect=None,
+    bump_prob=0.12,
 ):
-    """Generate Experiment-1 observational data under null or alternative.
+    """Generate the Experiment-2 observational design under null or alternative.
 
-    The null has equal interventional laws P_{Y(0)}=P_{Y(1)}, but observed
-    treated/control outcomes differ because treatment is confounded by X.
+    The null here is equal-in-law, not sharp: P_{Y(0)}=P_{Y(1)}, but Y(0) and
+    Y(1) are built from independent noise draws. Observed treated/control
+    outcomes still differ because treatment is confounded by X.
     """
     if setting not in DEFAULT_EFFECTS:
         raise ValueError(f"Unknown setting: {setting}")
@@ -138,14 +141,14 @@ def simulate_observational(
 # DR-xKTE / AIPW-xKTE: user-provided statistic with numerical guards only.
 # -----------------------------------------------------------------------------
 
-def _as_2d(A: np.ndarray):
+def _as_2d(A):
     A = np.asarray(A, dtype=float)
     if A.ndim == 1:
         A = A.reshape(-1, 1)
     return A
 
 
-def _safe_solve(A: np.ndarray, B: np.ndarray, jitter: float = 1e-8):
+def _safe_solve(A, B, jitter=1e-8):
     # Fast dense solve for the KRR systems in DR-xKTE. We use the general
     # LAPACK solver instead of a pseudo-inverse fallback, since rare numerical
     # non-PD issues should not make a Monte Carlo repetition hang.
@@ -270,6 +273,31 @@ PLOT_ORDER_ALL = [
     "ODR-ME-NoSplit",
 ]
 
+PAPER_SETTINGS = [
+    ("causal_null", "Null"),
+    ("mean_shift", "Mean shift"),
+    ("variance_shift", "Variance shift"),
+    ("localized_bump", "Localized bump"),
+]
+
+DISPLAY_METHODS = {
+    "ODR-ME": "DR-ME",
+    "ODR-ME-Rand": "DR-ME-Rand",
+    "ODR-ME-NoSplit": "DR-ME-NoSplit",
+}
+
+SOLID_METHODS = {"ODR-ME", "DR-xKTE"}
+HIGHLIGHT_METHODS = {"ODR-ME", "DR-xKTE", "ODR-ME-Rand"}
+METHOD_COLORS = {
+    "ODR-ME": "#1f77b4",
+    "DR-xKTE": "#ff7f0e",
+    "ODR-ME-Rand": "#2ca02c",
+    "IPW-ME plug-in": "#d62728",
+    "DM-ME plug-in": "#9467bd",
+    "Naive observed ME": "#8c564b",
+    "ODR-ME-NoSplit": "#e377c2",
+}
+
 
 def run_one(task):
     (
@@ -316,7 +344,7 @@ def run_one(task):
 
     p_global = float(A[idx_eta].mean())
 
-    out: Dict[str, float] = {
+    out = {
         "n": int(n),
         "seed": int(seed),
         "setting": OUTPUT_SETTING.get(setting, setting),
@@ -401,7 +429,7 @@ def run_one(task):
 # Summary and plotting.
 # -----------------------------------------------------------------------------
 
-def summarize(df: pd.DataFrame, alpha: float):
+def summarize(df, alpha):
     rows = []
     for (setting, n), dfg in df.groupby(["setting", "n"]):
         R = len(dfg)
@@ -439,14 +467,21 @@ def summarize(df: pd.DataFrame, alpha: float):
     return pd.DataFrame(rows)
 
 
-def plot_panels(summary: pd.DataFrame, outpath: str, methods: Sequence[str], alpha: float, title: str):
+def plot_panels(summary, outpath, methods, alpha):
     import matplotlib.pyplot as plt
+    from matplotlib import colors as mcolors
 
     settings = [s for s in PLOT_SETTINGS if s in set(summary["setting"])]
-    ncols = 2
-    nrows = int(math.ceil(len(settings) / ncols))
-    fig, axes = plt.subplots(nrows, ncols, figsize=(10.8, 4.1 * nrows), sharey=True)
-    axes = np.asarray(axes).reshape(-1)
+    fig, axes = plt.subplots(1, len(settings), figsize=(4.9 * len(settings), 4.5), sharey=True)
+    axes = np.atleast_1d(axes)
+    title_fs = 16
+    label_fs = 15
+    tick_fs = 12
+    legend_fs = 14
+
+    def lighten_color(color, whiten):
+        rgb = np.array(mcolors.to_rgb(color))
+        return tuple((1.0 - whiten) * rgb + whiten * np.ones(3))
 
     for ax, setting in zip(axes, settings):
         dfs = summary[summary["setting"] == setting]
@@ -454,35 +489,54 @@ def plot_panels(summary: pd.DataFrame, outpath: str, methods: Sequence[str], alp
             dfm = dfs[dfs["method"] == method].sort_values("n")
             if dfm.empty:
                 continue
-            ax.errorbar(
+            base_color = METHOD_COLORS.get(method, "#333333")
+            highlight = method in HIGHLIGHT_METHODS
+            line_style = "-" if method in SOLID_METHODS else "--"
+            line_color = base_color if highlight else lighten_color(base_color, 0.45)
+            band_color = lighten_color(base_color, 0.55 if highlight else 0.78)
+            ax.plot(
                 dfm["n"],
                 dfm["rejection_rate"],
-                yerr=1.96 * dfm["mc_se_rate"],
-                marker="o",
-                linewidth=1.5,
-                capsize=2.5,
-                label=method,
+                color=line_color,
+                linestyle=line_style,
+                linewidth=2.4 if highlight else 1.8,
+                alpha=1.0 if highlight else 0.95,
+                label=DISPLAY_METHODS.get(method, method),
             )
-        ax.axhline(alpha, linestyle="--", linewidth=1)
+            ax.fill_between(
+                dfm["n"].to_numpy(dtype=float),
+                dfm["ci95_low"].to_numpy(dtype=float),
+                dfm["ci95_high"].to_numpy(dtype=float),
+                color=band_color,
+                alpha=0.32 if highlight else 0.24,
+                linewidth=0,
+            )
+        if setting in {"causal_null", "null"}:
+            ax.axhline(alpha, linestyle="--", linewidth=1, color="#666666", alpha=0.9)
         ax.set_xscale("log")
         ax.set_ylim(-0.03, 1.03)
-        ax.set_title(SETTING_LABELS.get(setting, setting))
-        ax.set_xlabel("sample size n")
+        ax.set_title(SETTING_LABELS.get(setting, setting), fontsize=title_fs, pad=8)
+        ax.set_xlabel("sample size n", fontsize=label_fs)
+        ax.tick_params(axis="both", labelsize=tick_fs)
         ax.grid(True, alpha=0.25)
-    for ax in axes[len(settings):]:
-        ax.axis("off")
-    axes[0].set_ylabel(f"rejection rate at alpha={alpha}")
-    if len(axes) > 2:
-        axes[2].set_ylabel(f"rejection rate at alpha={alpha}")
+    axes[0].set_ylabel(f"rejection rate at alpha={alpha}", fontsize=label_fs)
     handles, labels = axes[0].get_legend_handles_labels()
-    fig.legend(handles, labels, frameon=False, ncol=min(4, max(1, len(labels))), loc="lower center")
-    fig.suptitle(title, y=0.995)
-    fig.tight_layout(rect=[0, 0.07, 1, 0.97])
+    fig.legend(
+        handles,
+        labels,
+        frameon=False,
+        ncol=min(len(labels), max(1, len(labels))),
+        loc="lower center",
+        fontsize=legend_fs,
+        columnspacing=1.1,
+        handlelength=2.5,
+    )
+    fig.tight_layout(rect=[0, 0.10, 1, 1])
     fig.savefig(outpath, dpi=240, bbox_inches="tight")
     plt.close(fig)
 
 
-def plot_location_hist(df: pd.DataFrame, outpath: str):
+def plot_location_hist(df, outpath):
     import matplotlib.pyplot as plt
 
     if "loc_dr_split" not in df.columns:
@@ -490,13 +544,16 @@ def plot_location_hist(df: pd.DataFrame, outpath: str):
     settings = [s for s in ["mean_shift", "variance_shift", "localized_bump"] if s in set(df["setting"])]
     if not settings:
         return
-    fig, axes = plt.subplots(1, len(settings), figsize=(4.4 * len(settings), 3.4), sharey=False)
+    fig, axes = plt.subplots(1, len(settings), figsize=(4.7 * len(settings), 3.9), sharey=False)
     if len(settings) == 1:
         axes = [axes]
+    title_fs = 15
+    label_fs = 14
+    tick_fs = 12
     for ax, setting in zip(axes, settings):
         d = df[df["setting"] == setting]
         d = d[d["n"] == d["n"].max()]
-        vals: List[float] = []
+        vals = []
         for s in d["loc_dr_split"].dropna().astype(str):
             for token in s.split(";"):
                 try:
@@ -505,13 +562,85 @@ def plot_location_hist(df: pd.DataFrame, outpath: str):
                     pass
         if vals:
             ax.hist(vals, bins=30, density=True)
-        ax.set_title(f"{SETTING_LABELS.get(setting, setting)}, largest n")
-        ax.set_xlabel("selected ODR-ME location")
-        ax.set_ylabel("density")
+        ax.set_title(f"{SETTING_LABELS.get(setting, setting)}, largest n", fontsize=title_fs, pad=8)
+        ax.set_xlabel("selected DR-ME location", fontsize=label_fs)
+        ax.set_ylabel("density", fontsize=label_fs)
+        ax.tick_params(axis="both", labelsize=tick_fs)
         ax.grid(True, alpha=0.25)
     fig.tight_layout()
     fig.savefig(outpath, dpi=240, bbox_inches="tight")
     plt.close(fig)
+
+
+def export_tex_tables(summary, outdir):
+    tex_paths = []
+    n_values = sorted(int(n) for n in summary["n"].unique())
+
+    lines = [
+        "Setting & Method & " + " & ".join(f"$n={n}$" for n in n_values) + r" \\",
+        r"\midrule",
+    ]
+    for setting, setting_label in PAPER_SETTINGS:
+        block = summary[
+            (summary["setting"] == setting)
+            & (summary["method"].isin(["ODR-ME", "DR-xKTE"]))
+        ]
+        if block.empty:
+            continue
+        for idx, method in enumerate(["ODR-ME", "DR-xKTE"]):
+            dfm = block[block["method"] == method].set_index("n")
+            row = [setting_label if idx == 0 else "", method]
+            for n in n_values:
+                row.append(tex_float(dfm["rejection_rate"].get(n)))
+            lines.append(" & ".join(row) + r" \\")
+        lines.append(r"\midrule")
+    if lines[-1] == r"\midrule":
+        lines.pop()
+
+    path = os.path.join(outdir, "tab_power_odrme_drxkte.tex")
+    write_booktabs_table(
+        path,
+        "ll" + "c" * len(n_values),
+        lines,
+        "Empirical rejection rates for ODR-ME and DR-xKTE. Under the null, the "
+        "entries estimate type-I error. Under the alternatives, they estimate power.",
+        "tab:power_odrme_drxkte",
+    )
+    tex_paths.append(path)
+
+    n_max = int(summary["n"].max())
+    lines = [
+        "Method & Null & Mean shift & Variance shift & Localized bump " + r"\\",
+        r"\midrule",
+    ]
+    block = summary[summary["n"] == n_max]
+    methods = [
+        "ODR-ME",
+        "DR-xKTE",
+        "ODR-ME-Rand",
+        "IPW-ME plug-in",
+        "DM-ME plug-in",
+        "Naive observed ME",
+        "ODR-ME-NoSplit",
+    ]
+    for method in methods:
+        dfm = block[block["method"] == method].set_index("setting")
+        row = [method]
+        for setting, _ in PAPER_SETTINGS:
+            row.append(tex_float(dfm["rejection_rate"].get(setting)))
+        lines.append(" & ".join(row) + r" \\")
+
+    path = os.path.join(outdir, "tab_power_diagnostics_nmax.tex")
+    write_booktabs_table(
+        path,
+        "lcccc",
+        lines,
+        f"Diagnostic baselines at $n={n_max}$. These baselines are included to "
+        "interpret the power curves, not all as valid calibrated competitors.",
+        "tab:power_diagnostics_n3000",
+    )
+    tex_paths.append(path)
+    return tex_paths
 
 
 def parse_args():
@@ -569,20 +698,16 @@ def main():
                     print(f"completed {k}/{len(tasks)} runs", flush=True)
 
     df = pd.DataFrame(records)
-    raw_path = os.path.join(args.outdir, "exp2_raw_pvalues.csv")
-    df.to_csv(raw_path, index=False)
-
     summary = summarize(df, alpha=args.alpha)
-    summary_path = os.path.join(args.outdir, "exp2_power_summary.csv")
-    summary.to_csv(summary_path, index=False)
 
     all_plot = os.path.join(args.outdir, "exp2_all_exp1_baselines_plus_drxkte.png")
     main_plot = os.path.join(args.outdir, "exp2_odrme_vs_drxkte.png")
     loc_plot = os.path.join(args.outdir, "exp2_odrme_selected_locations.png")
 
-    plot_panels(summary, all_plot, PLOT_ORDER_ALL, args.alpha, "Experiment 2: Experiment-1 baselines under alternatives")
-    plot_panels(summary, main_plot, ["ODR-ME", "DR-xKTE"], args.alpha, "Experiment 2: ODR-ME versus DR-xKTE")
+    plot_panels(summary, all_plot, PLOT_ORDER_ALL, args.alpha)
+    plot_panels(summary, main_plot, ["ODR-ME", "DR-xKTE"], args.alpha)
     plot_location_hist(df, loc_plot)
+    tex_paths = export_tex_tables(summary, args.outdir)
 
     shown = summary[["setting", "n", "method", "n_reps", "rejection_rate", "ci95_low", "ci95_high", "mean_p", "median_p"]]
     shown = shown.sort_values(["setting", "n", "method"])
@@ -590,11 +715,12 @@ def main():
     pd.set_option("display.width", 220)
     print("\nSummary:")
     print(shown.to_string(index=False))
-    print(f"\nWrote: {raw_path}")
-    print(f"Wrote: {summary_path}")
+    print()
     print(f"Wrote: {all_plot}")
     print(f"Wrote: {main_plot}")
     print(f"Wrote: {loc_plot}")
+    for tex_path in tex_paths:
+        print(f"Wrote: {tex_path}")
     print(f"Elapsed: {time.time() - t0:.1f} seconds")
 
 

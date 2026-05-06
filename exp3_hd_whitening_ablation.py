@@ -22,7 +22,7 @@ Recommended fixed-d_Y power run:
 Recommended dimension-sweep run:
   python exp3_hd_whitening_ablation.py \
     --mode dim_sweep --n-reps 200 --n-fixed 3000 \
-    --d-grid 2 5 10 25 50 --settings two_bump --J 5 --M 250 \
+    --d-grid 2 5 10 25 50 --settings null two_bump --J 5 --M 250 \
     --n-jobs -1 --outdir exp3_hd_dim_sweep_results
 """
 
@@ -34,11 +34,11 @@ import time
 import zipfile
 from dataclasses import dataclass
 from multiprocessing import Pool, cpu_count
-from typing import Dict, List, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
 from scipy.special import expit
+from latex_tables import tex_float, write_booktabs_table
 from repo_paths import results_dir
 
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -54,6 +54,11 @@ METHOD_LABELS = {
     "random": "Random locations",
 }
 PLOT_ORDER = list(METHOD_LABELS.values())
+PAPER_METHODS = [
+    ("Full whitening (ODR-ME)", "ODR-ME"),
+    ("Raw witness", "Raw witness"),
+    ("Random locations", "Random locations"),
+]
 
 SETTING_LABELS = {
     "causal_null": "Null",
@@ -68,7 +73,7 @@ SETTING_LABELS = {
 # -----------------------------------------------------------------------------
 
 
-def _fixed_loading_matrix(p: int, d_y: int):
+def _fixed_loading_matrix(p, d_y):
     """Deterministic small loading matrix, independent of simulation seed."""
     j = np.arange(1, d_y + 1, dtype=float)
     W = np.zeros((p, d_y), dtype=float)
@@ -80,7 +85,7 @@ def _fixed_loading_matrix(p: int, d_y: int):
     return W[:p]
 
 
-def outcome_mean(X: np.ndarray, d_y: int):
+def outcome_mean(X, d_y):
     """Moderate-dimensional prognostic signal shared by Y(0),Y(1)."""
     X = np.asarray(X, dtype=float)
     p = X.shape[1]
@@ -99,13 +104,13 @@ def outcome_mean(X: np.ndarray, d_y: int):
 
 
 def simulate_hd_observational(
-    n: int,
-    seed: int,
-    setting: str = "null",
-    d_y: int = 25,
-    sigma_y: float = 0.70,
-    effect: float = 5.0,
-    bump_prob: float = 0.06,
+    n,
+    seed,
+    setting="null",
+    d_y=25,
+    sigma_y=0.70,
+    effect=5.0,
+    bump_prob=0.06,
 ):
     """Simulate high-dimensional observational data.
 
@@ -201,10 +206,10 @@ def simulate_hd_observational(
 
 
 def make_observed_dictionary(
-    Y_tr: np.ndarray,
-    source_indices: np.ndarray,
-    M: int,
-    rng: np.random.Generator,
+    Y_tr,
+    source_indices,
+    M,
+    rng,
 ):
     """Use observed training outcomes as candidate locations."""
     n_tr = len(Y_tr)
@@ -213,7 +218,7 @@ def make_observed_dictionary(
     return np.asarray(Y_tr[cols], dtype=float), np.asarray(source_indices[cols], dtype=int)
 
 
-def _mean_var(Z: np.ndarray):
+def _mean_var(Z):
     Z = np.asarray(Z, dtype=float)
     mu = Z.mean(axis=0)
     Zc = Z - mu
@@ -221,7 +226,7 @@ def _mean_var(Z: np.ndarray):
     return mu, var
 
 
-def fast_full_greedy_select(Z_train: np.ndarray, J: int, tau: float):
+def fast_full_greedy_select(Z_train, J, tau):
     """Greedy maximization of mu^T(S+tau I)^(-1)mu via Schur gains."""
     Z = np.asarray(Z_train, dtype=float)
     n, M = Z.shape
@@ -230,7 +235,7 @@ def fast_full_greedy_select(Z_train: np.ndarray, J: int, tau: float):
     Zc = Z - mu
     S = (Zc.T @ Zc) / max(n - 1, 1)
 
-    selected: List[int] = []
+    selected = []
     available = np.ones(M, dtype=bool)
 
     scores = (mu * mu) / (np.diag(S) + tau)
@@ -263,7 +268,7 @@ def fast_full_greedy_select(Z_train: np.ndarray, J: int, tau: float):
     return selected
 
 
-def select_locations(Z_train: np.ndarray, J: int, tau: float, method: str, rng: np.random.Generator):
+def select_locations(Z_train, J, tau, method, rng):
     M = Z_train.shape[1]
     J = min(int(J), M)
     if method == "full_whitened":
@@ -278,14 +283,14 @@ def select_locations(Z_train: np.ndarray, J: int, tau: float, method: str, rng: 
 
 
 def selection_diagnostics(
-    Z_train: np.ndarray,
-    C: np.ndarray,
-    cols: Sequence[int],
-    dict_bump_type: np.ndarray,
+    Z_train,
+    C,
+    cols,
+    dict_bump_type,
 ):
     cols = list(cols)
     labels = np.asarray(dict_bump_type)[cols]
-    out: Dict[str, float] = {
+    out = {
         "selected_bump_frac": float(np.mean(np.abs(labels) > 0)) if len(labels) else 0.0,
         "selected_bump_count": float(np.sum(np.abs(labels) > 0)),
         "selected_any_bump": float(np.any(np.abs(labels) > 0)),
@@ -368,7 +373,7 @@ def run_one(task):
     Ztr_dr = exp1.pseudo_feature_matrix("dr", X[idx_tr], A[idx_tr], Y[idx_tr], C, ell_y, nuis)
     Zte_dr = exp1.pseudo_feature_matrix("dr", X[idx_te], A[idx_te], Y[idx_te], C, ell_y, nuis)
 
-    out: Dict[str, object] = {
+    out = {
         "n": int(n),
         "seed": int(seed),
         "setting": "causal_null" if setting in {"null", "causal_null"} else setting,
@@ -400,7 +405,7 @@ def run_one(task):
     return out
 
 
-def summarize(df: pd.DataFrame, alpha: float):
+def summarize(df, alpha):
     rows = []
     group_cols = ["setting", "d_y", "n"]
     for key, dfg in df.groupby(group_cols):
@@ -409,7 +414,7 @@ def summarize(df: pd.DataFrame, alpha: float):
             pvals = pd.to_numeric(dfg[f"p_{method}"], errors="coerce").dropna().to_numpy()
             rate = float(np.mean(pvals <= alpha)) if len(pvals) else np.nan
             se = math.sqrt(max(rate * (1.0 - rate), 1e-12) / max(len(pvals), 1)) if len(pvals) else np.nan
-            row: Dict[str, object] = {
+            row = {
                 "setting": setting,
                 "d_y": int(d_y),
                 "n": int(n),
@@ -443,7 +448,7 @@ def summarize(df: pd.DataFrame, alpha: float):
 # -----------------------------------------------------------------------------
 
 
-def plot_power(summary: pd.DataFrame, outpath: str, alpha: float):
+def plot_power(summary, outpath, alpha):
     import matplotlib.pyplot as plt
 
     settings = [s for s in ["causal_null", "local_bump", "two_bump"] if s in set(summary["setting"])]
@@ -485,7 +490,7 @@ def plot_power(summary: pd.DataFrame, outpath: str, alpha: float):
     plt.close(fig)
 
 
-def plot_bump_selection(summary: pd.DataFrame, outpath: str, setting: str = "two_bump"):
+def plot_bump_selection(summary, outpath, setting="two_bump"):
     import matplotlib.pyplot as plt
 
     if setting not in set(summary["setting"]):
@@ -529,35 +534,49 @@ def plot_bump_selection(summary: pd.DataFrame, outpath: str, setting: str = "two
     plt.close(fig)
 
 
-def plot_dimension_sweep(summary: pd.DataFrame, outpath: str, alpha: float, setting: str = "two_bump"):
+def plot_dimension_sweep(summary, outpath, alpha):
     import matplotlib.pyplot as plt
 
-    d = summary[summary["setting"] == setting].copy()
-    if d.empty:
-        return
-    max_n = int(d["n"].max())
-    d = d[d["n"] == max_n].sort_values("d_y")
     fig, axes = plt.subplots(1, 2, figsize=(10.2, 3.8))
-    for method in PLOT_ORDER:
-        dfm = d[d["method"] == method].sort_values("d_y")
-        if dfm.empty:
+
+    null_setting = None
+    for candidate in ["null", "causal_null"]:
+        if candidate in set(summary["setting"]):
+            null_setting = candidate
+            break
+    alt_setting = "two_bump" if "two_bump" in set(summary["setting"]) else None
+    if alt_setting is None and "local_bump" in set(summary["setting"]):
+        alt_setting = "local_bump"
+
+    panels = [(null_setting, axes[0]), (alt_setting, axes[1])]
+    max_n = int(summary["n"].max())
+    for setting, ax in panels:
+        if setting is None:
+            ax.axis("off")
             continue
-        axes[0].errorbar(
-            dfm["d_y"], dfm["rejection_rate"],
-            yerr=1.96 * dfm["mc_se_rate"], marker="o", linewidth=1.5, capsize=2.5, label=method,
-        )
-        axes[1].plot(dfm["d_y"], dfm["selected_any_bump"], marker="o", linewidth=1.5, label=method)
-    axes[0].axhline(alpha, linestyle="--", linewidth=1)
-    axes[0].set_ylim(-0.03, 1.03)
-    axes[0].set_xlabel("outcome dimension d_Y")
-    axes[0].set_ylabel(f"power at alpha={alpha}")
-    axes[0].set_title(f"{SETTING_LABELS.get(setting, setting)}, n={max_n}")
-    axes[0].grid(True, alpha=0.25)
-    axes[1].set_ylim(-0.03, 1.03)
-    axes[1].set_xlabel("outcome dimension d_Y")
-    axes[1].set_ylabel("Pr(select at least one bump location)")
-    axes[1].set_title("Selection diagnostic")
-    axes[1].grid(True, alpha=0.25)
+        d = summary[(summary["setting"] == setting) & (summary["n"] == max_n)].copy()
+        d = d.sort_values("d_y")
+        for method in PLOT_ORDER:
+            dfm = d[d["method"] == method].sort_values("d_y")
+            if dfm.empty:
+                continue
+            ax.errorbar(
+                dfm["d_y"],
+                dfm["rejection_rate"],
+                yerr=1.96 * dfm["mc_se_rate"],
+                marker="o",
+                linewidth=1.5,
+                capsize=2.5,
+                label=method,
+            )
+        ax.axhline(alpha, linestyle="--", linewidth=1)
+        ax.set_ylim(-0.03, 1.03)
+        ax.set_xlabel("outcome dimension d_Y")
+        ylabel = f"rejection rate at alpha={alpha}" if setting == null_setting else f"power at alpha={alpha}"
+        ax.set_ylabel(ylabel)
+        ax.set_title(f"{SETTING_LABELS.get(setting, setting)}, n={max_n}")
+        ax.grid(True, alpha=0.25)
+
     handles, labels = axes[0].get_legend_handles_labels()
     fig.legend(handles, labels, frameon=False, ncol=2, loc="lower center")
     fig.tight_layout(rect=[0, 0.16, 1, 1])
@@ -565,12 +584,115 @@ def plot_dimension_sweep(summary: pd.DataFrame, outpath: str, alpha: float, sett
     plt.close(fig)
 
 
+def export_tex_tables(summary, outdir):
+    tex_paths = []
+    d_values = sorted(int(d) for d in summary["d_y"].unique())
+
+    def write_rate_table(setting, filename, caption, label):
+        block = summary[summary["setting"] == setting]
+        if block.empty:
+            return None
+        lines = [
+            "Method & " + " & ".join(f"$d_Y={d}$" for d in d_values) + r" \\",
+            r"\midrule",
+        ]
+        by_method = {
+            method: df.set_index("d_y")["rejection_rate"]
+            for method, df in block.groupby("method")
+        }
+        for internal_name, paper_name in PAPER_METHODS:
+            row = [paper_name]
+            series = by_method.get(internal_name)
+            for d_y in d_values:
+                value = series.get(d_y) if series is not None else None
+                row.append(tex_float(value))
+            lines.append(" & ".join(row) + r" \\")
+
+        path = os.path.join(outdir, filename)
+        write_booktabs_table(path, "l" + "c" * len(d_values), lines, caption, label)
+        return path
+
+    null_setting = None
+    for candidate in ["null", "causal_null"]:
+        if candidate in set(summary["setting"]):
+            null_setting = candidate
+            break
+    if null_setting is not None:
+        path = write_rate_table(
+            null_setting,
+            "tab_exp_hd_null.tex",
+            "Null calibration in the high-dimensional outcome experiment. Entries "
+            "are empirical rejection rates at nominal level $\\alpha=0.05$.",
+            "tab:exp_hd_null",
+        )
+        if path is not None:
+            tex_paths.append(path)
+
+    alt_setting = "two_bump" if "two_bump" in set(summary["setting"]) else None
+    if alt_setting is not None:
+        path = write_rate_table(
+            alt_setting,
+            "tab_exp_hd_power.tex",
+            "Power under the high-dimensional two-bump alternative. Entries are "
+            "empirical rejection rates at nominal level $\\alpha=0.05$.",
+            "tab:exp_hd_power",
+        )
+        if path is not None:
+            tex_paths.append(path)
+
+        block = summary[summary["setting"] == alt_setting]
+        lines = [
+            "$d_Y$ & Method & Any bump & Distinct regions & Avg. corr. " + r"\\",
+            r"\midrule",
+        ]
+        for d_y in d_values:
+            dfd = block[block["d_y"] == d_y]
+            if dfd.empty:
+                continue
+            for idx, (internal_name, paper_name) in enumerate(PAPER_METHODS):
+                row_df = dfd[dfd["method"] == internal_name]
+                if row_df.empty:
+                    continue
+                row = row_df.iloc[0]
+                lines.append(
+                    " & ".join(
+                        [
+                            str(d_y) if idx == 0 else "",
+                            paper_name,
+                            tex_float(row["selected_any_bump"]),
+                            tex_float(row["selected_distinct_bump_types"]),
+                            tex_float(row["avg_abs_corr_train"]),
+                        ]
+                    )
+                    + r" \\"
+                )
+            lines.append(r"\midrule")
+        if lines[-1] == r"\midrule":
+            lines.pop()
+
+        path = os.path.join(outdir, "tab_exp_hd_selection.tex")
+        write_booktabs_table(
+            path,
+            "llccc",
+            lines,
+            'Selection diagnostics under the high-dimensional two-bump alternative. '
+            '"Any bump" is the probability that at least one selected location lies in a '
+            'true bump region. "Distinct regions" is the average number of distinct bump '
+            'regions selected. "Avg. corr." is the average absolute correlation among the '
+            "selected DR features on the training split.",
+            "tab:exp_hd_selection",
+        )
+        tex_paths.append(path)
+
+    return tex_paths
+
+
 # -----------------------------------------------------------------------------
 # Experiment driver
 # -----------------------------------------------------------------------------
 
 
-def build_tasks(args: argparse.Namespace):
+def build_tasks(args):
     tasks = []
     setting_code = {"null": 0, "causal_null": 0, "local_bump": 1, "two_bump": 2}
     if args.mode == "power":
@@ -600,7 +722,7 @@ def build_tasks(args: argparse.Namespace):
     return tasks
 
 
-def run_experiment(args: argparse.Namespace):
+def run_experiment(args):
     os.makedirs(args.outdir, exist_ok=True)
     tasks = build_tasks(args)
     t0 = time.time()
@@ -619,28 +741,27 @@ def run_experiment(args: argparse.Namespace):
                     print(f"completed {k}/{len(tasks)} runs", flush=True)
 
     df = pd.DataFrame(records)
-    raw_path = os.path.join(args.outdir, "exp3_hd_raw_pvalues.csv")
-    df.to_csv(raw_path, index=False)
     summary = summarize(df, args.alpha)
-    summary_path = os.path.join(args.outdir, "exp3_hd_summary.csv")
-    summary.to_csv(summary_path, index=False)
 
     if not getattr(args, "no_plots", False):
         if args.mode == "power":
             plot_power(summary, os.path.join(args.outdir, "exp3_hd_power_curves.png"), args.alpha)
             plot_bump_selection(summary, os.path.join(args.outdir, "exp3_hd_bump_selection.png"), setting="two_bump")
         else:
-            plot_dimension_sweep(summary, os.path.join(args.outdir, "exp3_hd_dimension_sweep.png"), args.alpha, setting=args.settings[0])
-            plot_bump_selection(summary, os.path.join(args.outdir, "exp3_hd_dim_bump_selection.png"), setting=args.settings[0])
+            plot_dimension_sweep(summary, os.path.join(args.outdir, "exp3_hd_dimension_sweep.png"), args.alpha)
+            bump_setting = "two_bump" if "two_bump" in args.settings else args.settings[-1]
+            plot_bump_selection(summary, os.path.join(args.outdir, "exp3_hd_dim_bump_selection.png"), setting=bump_setting)
+
+    tex_paths = export_tex_tables(summary, args.outdir)
 
     elapsed = time.time() - t0
-    print(f"Wrote: {raw_path}")
-    print(f"Wrote: {summary_path}")
+    for tex_path in tex_paths:
+        print(f"Wrote: {tex_path}")
     print(f"Elapsed: {elapsed:.1f} seconds")
     return df, summary
 
 
-def make_zip(outdir: str, script_path: str):
+def make_zip(outdir, script_path):
     zip_path = os.path.join(os.path.dirname(outdir), os.path.basename(outdir.rstrip(os.sep)) + "_package.zip")
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for p in [script_path, os.path.join(THIS_DIR, "exp1_calibration_dr_me_plugin.py")]:

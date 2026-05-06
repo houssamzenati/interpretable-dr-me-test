@@ -12,6 +12,7 @@ DEFAULT_RESULTS_DIRS = {
     "exp5": RESULTS_ROOT / "exp5",
     "octmnist_causal": RESULTS_ROOT / "octmnist_causal",
     "octmnist_mean_matched": RESULTS_ROOT / "octmnist_mean_matched",
+    "octmnist_mean_matched_image": RESULTS_ROOT / "octmnist_mean_matched_image",
 }
 
 

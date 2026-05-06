@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 
 import argparse
-import json
 import math
 import os
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
@@ -21,6 +20,7 @@ import numpy as np
 import pandas as pd
 import scipy.linalg as sla
 
+from latex_tables import tex_float, write_booktabs_table
 from repo_paths import results_dir
 
 
@@ -733,6 +733,61 @@ def plot_breakdown(raw, cfg, outpath):
     plt.close()
 
 
+def export_tex_tables(summary, cfg):
+    tex_paths = []
+    block = summary[
+        (summary["axis"] == "n")
+        & (summary["J"] == cfg.fixed_J)
+        & (summary["M"] == cfg.fixed_M)
+        & (summary["grad_steps"] == cfg.grad_steps)
+    ].copy()
+    n_values = [int(n) for n in cfg.n_grid if int(n) in set(block["n"])]
+    method_map = [
+        ("finite_dictionary", "ODR-ME-Dict"),
+        ("gradient_ascent", "ODR-ME-Grad"),
+        ("dr_xkte", "DR-xKTE"),
+    ]
+
+    def write_runtime_table(filename, label, metric, caption):
+        lines = [
+            "$n$ & ODR-ME-Dict & ODR-ME-Grad & DR-xKTE " + r"\\",
+            r"\midrule",
+        ]
+        for n in n_values:
+            dfn = block[block["n"] == n].set_index("method")
+            row = [str(n)]
+            for method, _ in method_map:
+                row.append(tex_float(dfn[metric].get(method)))
+            lines.append(" & ".join(row) + r" \\")
+
+        path = os.path.join(cfg.outdir, filename)
+        write_booktabs_table(path, "rrrr", lines, caption, label)
+        return path
+
+    tex_paths.append(
+        write_runtime_table(
+            "tab_runtime_total_drkte.tex",
+            "tab:runtime_total_drkte",
+            "total_sec_mean",
+            "Total runtime in seconds. Total runtime includes nuisance fitting, "
+            "location learning when applicable, and final testing. Results are "
+            f"averaged over {cfg.reps} random seeds with $J={cfg.fixed_J}$, "
+            f"$M={cfg.fixed_M}$, and {cfg.grad_steps} gradient steps for ODR-ME-Grad.",
+        )
+    )
+    tex_paths.append(
+        write_runtime_table(
+            "tab_runtime_core_drkte.tex",
+            "tab:runtime_core_drkte",
+            "core_sec_mean",
+            "Core method runtime in seconds. Core runtime removes nuisance fitting "
+            "and keeps only location learning plus the final test for ODR-ME, or "
+            "the global kernel statistic for DR-xKTE.",
+        )
+    )
+    return tex_paths
+
+
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--reps", type=int, default=Config.reps)
@@ -765,10 +820,6 @@ def main():
     cfg = parse_args()
     os.makedirs(cfg.outdir, exist_ok=True)
 
-    config_path = os.path.join(cfg.outdir, "exp5_config.json")
-    with open(config_path, "w") as f:
-        json.dump(asdict(cfg), f, indent=2)
-
     rows = []
     tasks = build_tasks(cfg)
     start = time.perf_counter()
@@ -781,12 +832,7 @@ def main():
             print(f"completed {i}/{len(tasks)} in {elapsed:.1f}s", flush=True)
 
     raw = pd.DataFrame(rows)
-    raw_path = os.path.join(cfg.outdir, "exp5_runtime_raw.csv")
-    raw.to_csv(raw_path, index=False)
-
     summary = summarize(raw)
-    summary_path = os.path.join(cfg.outdir, "exp5_runtime_summary.csv")
-    summary.to_csv(summary_path, index=False)
 
     plot_axis(
         summary,
@@ -821,8 +867,11 @@ def main():
         metric="total",
     )
     plot_breakdown(raw, cfg, os.path.join(cfg.outdir, "exp5_runtime_breakdown_nmax_drkte.png"))
+    tex_paths = export_tex_tables(summary, cfg)
 
     print(f"Saved {cfg.outdir}")
+    for tex_path in tex_paths:
+        print(f"Wrote: {tex_path}")
     print(summary.to_string(index=False))
 
 

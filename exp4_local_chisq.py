@@ -28,20 +28,19 @@ Locations:
 """
 
 import argparse
-import json
 import math
 import os
 from pathlib import Path
-from typing import Dict, List, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
 import scipy.stats as st
 import matplotlib.pyplot as plt
+from latex_tables import tex_float, write_booktabs_table
 from repo_paths import results_dir
 
 
-def prognostic_g(X: np.ndarray):
+def prognostic_g(X):
     return (
         0.90 * X[:, 0]
         + 0.60 * np.sin(X[:, 1])
@@ -51,22 +50,22 @@ def prognostic_g(X: np.ndarray):
     )
 
 
-def expit(x: np.ndarray):
+def expit(x):
     return 1.0 / (1.0 + np.exp(-x))
 
 
-def propensity(X: np.ndarray):
+def propensity(X):
     lin = 0.90 * X[:, 0] - 0.75 * X[:, 1] + 0.55 * X[:, 2] - 0.40 * X[:, 3]
     return np.clip(expit(lin), 0.06, 0.94)
 
 
-def rbf_y(Y: np.ndarray, V: np.ndarray, ell_y: float):
+def rbf_y(Y, V, ell_y):
     Y = np.asarray(Y).reshape(-1, 1)
     V = np.asarray(V).reshape(1, -1)
     return np.exp(-0.5 * ((Y - V) / ell_y) ** 2)
 
 
-def conditional_kernel_mean(X: np.ndarray, V: np.ndarray, ell_y: float, sigma_y: float, delta: float):
+def conditional_kernel_mean(X, V, ell_y, sigma_y, delta):
     """
     E[ exp(-(v - Y)^2/(2 ell_y^2)) | X=x, treatment arm with shift delta ],
     when Y = g(x) + delta + eps, eps ~ N(0, sigma_y^2).
@@ -78,7 +77,7 @@ def conditional_kernel_mean(X: np.ndarray, V: np.ndarray, ell_y: float, sigma_y:
     return const * np.exp(-0.5 * ((V - mu) ** 2) / denom)
 
 
-def derivative_mu_at_null(X: np.ndarray, V: np.ndarray, ell_y: float, sigma_y: float):
+def derivative_mu_at_null(X, V, ell_y, sigma_y):
     """
     Derivative at delta=0 of E[k(v,g(X)+delta+eps)] - E[k(v,g(X)+eps)]
     with respect to delta.
@@ -91,7 +90,7 @@ def derivative_mu_at_null(X: np.ndarray, V: np.ndarray, ell_y: float, sigma_y: f
     return deriv.mean(axis=0)
 
 
-def simulate_observed(n: int, rng: np.random.Generator, delta: float, sigma_y: float):
+def simulate_observed(n, rng, delta, sigma_y):
     X = rng.normal(size=(n, 5))
     pi = propensity(X)
     A = rng.binomial(1, pi).astype(int)
@@ -104,8 +103,7 @@ def simulate_observed(n: int, rng: np.random.Generator, delta: float, sigma_y: f
     return X, A, Y.reshape(-1, 1)
 
 
-def dr_feature_true_nuisance(X: np.ndarray, A: np.ndarray, Y: np.ndarray, V: np.ndarray,
-                             ell_y: float, sigma_y: float, delta: float):
+def dr_feature_true_nuisance(X, A, Y, V, ell_y, sigma_y, delta):
     """
     DR finite-location pseudo-feature using the true propensity and true conditional kernel means.
     """
@@ -119,7 +117,7 @@ def dr_feature_true_nuisance(X: np.ndarray, A: np.ndarray, Y: np.ndarray, V: np.
     return phi1 - phi0
 
 
-def hotelling_stat(Z: np.ndarray, ridge: float):
+def hotelling_stat(Z, ridge):
     n, J = Z.shape
     zbar = Z.mean(axis=0)
     Zc = Z - zbar
@@ -127,7 +125,7 @@ def hotelling_stat(Z: np.ndarray, ridge: float):
     return float(n * zbar @ np.linalg.pinv(S + ridge * np.eye(J)) @ zbar)
 
 
-def choose_bandwidth_from_null(seed: int, n_pilot: int, sigma_y: float):
+def choose_bandwidth_from_null(seed, n_pilot, sigma_y):
     rng = np.random.default_rng(seed)
     X = rng.normal(size=(n_pilot, 5))
     Y = prognostic_g(X) + rng.normal(scale=sigma_y, size=n_pilot)
@@ -140,8 +138,7 @@ def choose_bandwidth_from_null(seed: int, n_pilot: int, sigma_y: float):
     return float(max(np.median(vals), 1e-3))
 
 
-def pilot_select_locations(seed: int, n_pilot: int, M: int, ell_y: float,
-                           sigma_y: float, J: int, ridge: float):
+def pilot_select_locations(seed, n_pilot, M, ell_y, sigma_y, J, ridge):
     """
     Select locations once on an independent pilot sample by maximizing the
     local noncentrality proxy eta' Sigma^{-1} eta.
@@ -162,7 +159,7 @@ def pilot_select_locations(seed: int, n_pilot: int, M: int, ell_y: float,
     Zc = ZC - ZC.mean(axis=0)
     Sigma_C = (Zc.T @ Zc) / max(n_pilot - 1, 1)
 
-    selected: List[int] = []
+    selected = []
     available = set(range(M))
     for _ in range(J):
         best, best_val = None, -np.inf
@@ -192,9 +189,7 @@ def pilot_select_locations(seed: int, n_pilot: int, M: int, ell_y: float,
     }
 
 
-def run_mc(seed: int, n_values: Sequence[int], h_values: Sequence[float], n_reps: int,
-           V: np.ndarray, lambda_V: float, ell_y: float, sigma_y: float,
-           ridge: float, alpha: float):
+def run_mc(seed, n_values, h_values, n_reps, V, lambda_V, ell_y, sigma_y, ridge, alpha):
     rng = np.random.default_rng(seed)
     rows = []
     stat_rows = []
@@ -242,7 +237,7 @@ def run_mc(seed: int, n_values: Sequence[int], h_values: Sequence[float], n_reps
     return pd.DataFrame(rows), pd.DataFrame(stat_rows)
 
 
-def make_figures(summary: pd.DataFrame, stats: pd.DataFrame, outdir: Path, alpha: float):
+def make_figures(summary, stats, outdir, alpha):
     plt.figure(figsize=(8, 5))
     for n, sub in summary.groupby("n"):
         sub = sub.sort_values("h")
@@ -319,6 +314,41 @@ def make_figures(summary: pd.DataFrame, stats: pd.DataFrame, outdir: Path, alpha
     plt.close()
 
 
+def export_tex_tables(summary, outdir):
+    n_values = sorted(int(n) for n in summary["n"].unique())
+    h_values = sorted(float(h) for h in summary["h"].unique())
+    lines = [
+        "$h$ & $h^2\\widehat\\lambda_V$ & Theory & "
+        + " & ".join(f"$n={n}$" for n in n_values)
+        + r" \\",
+        r"\midrule",
+    ]
+    for h in h_values:
+        block = summary[summary["h"] == h].set_index("n")
+        first = block.iloc[0]
+        row = [
+            f"{int(h)}" if abs(h - int(h)) < 1e-12 else tex_float(h, digits=1),
+            tex_float(first["ncp"]),
+            tex_float(first["theory_power"]),
+        ]
+        for n in n_values:
+            value = block.loc[n, "emp_power"] if n in block.index else None
+            row.append(tex_float(value))
+        lines.append(" & ".join(row) + r" \\")
+
+    path = outdir / "tab_exp4_local_power.tex"
+    write_booktabs_table(
+        str(path),
+        "ccc" + "c" * len(n_values),
+        lines,
+        "Experiment 4: empirical rejection rates under local alternatives, "
+        "compared with the noncentral chi-square prediction. The theoretical "
+        "power is computed from $\\chi^2_2(h^2\\widehat\\lambda_V)$.",
+        "tab:exp4_local_power",
+    )
+    return [str(path)]
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--outdir", type=str, default=str(results_dir("exp4")))
@@ -363,30 +393,14 @@ def main():
         alpha=args.alpha,
     )
 
-    summary.to_csv(outdir / "exp4_local_chisq_summary.csv", index=False)
-    stat_draws.to_csv(outdir / "exp4_stat_draws_subset.csv", index=False)
-    with open(outdir / "exp4_pilot_locations.json", "w") as f:
-        serial = {
-            "V": V.tolist(),
-            "selected_indices": pilot["selected_indices"],
-            "eta_V": np.asarray(pilot["eta_V"]).tolist(),
-            "Sigma_V": np.asarray(pilot["Sigma_V"]).tolist(),
-            "lambda_V": lambda_V,
-            "ell_y": ell_y,
-            "J": args.J,
-            "pilot_n": args.pilot_n,
-            "pilot_M": args.pilot_M,
-            "n_reps": args.n_reps,
-            "n_values": args.n_values,
-            "h_values": args.h_values,
-        }
-        json.dump(serial, f, indent=2)
-
     make_figures(summary, stat_draws, outdir, alpha=args.alpha)
+    tex_paths = export_tex_tables(summary, outdir)
 
     print("Selected V:", V)
     print("ell_y:", ell_y)
     print("lambda_V:", lambda_V)
+    for tex_path in tex_paths:
+        print("Wrote:", tex_path)
     print(summary.to_string(index=False))
 
 

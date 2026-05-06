@@ -14,14 +14,12 @@ Default run:
 Outputs:
     contour_estimated_oracle_overlay/contour_estimated_with_oracle_v2_overlay_tight.png
     contour_estimated_oracle_overlay/contour_estimated_with_oracle_v2_overlay_tight.pdf
-    contour_estimated_oracle_overlay/contour_estimated_with_oracle_v2_overlay_metadata.json
 """
 import argparse
 import json
 import math
 import os
 from pathlib import Path
-from typing import Dict, List, Tuple
 
 # Keep BLAS thread usage controlled on laptops/servers.
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
@@ -43,12 +41,12 @@ from repo_paths import results_dir
 # -----------------------------------------------------------------------------
 
 
-def sigmoid(x: np.ndarray):
+def sigmoid(x):
     x = np.clip(np.asarray(x, dtype=float), -40.0, 40.0)
     return 1.0 / (1.0 + np.exp(-x))
 
 
-def covariance_matrix(z: np.ndarray):
+def covariance_matrix(z):
     z = np.asarray(z, dtype=float)
     if z.ndim == 1:
         z = z[:, None]
@@ -58,7 +56,7 @@ def covariance_matrix(z: np.ndarray):
     return centered.T @ centered / (z.shape[0] - 1)
 
 
-def hotelling_statistic(z: np.ndarray, ridge: float = 1e-6):
+def hotelling_statistic(z, ridge=1e-6):
     z = np.asarray(z, dtype=float)
     if z.ndim == 1:
         z = z[:, None]
@@ -69,14 +67,14 @@ def hotelling_statistic(z: np.ndarray, ridge: float = 1e-6):
     return float(z.shape[0] * mean @ np.linalg.pinv(mat) @ mean)
 
 
-def split_indices(n: int, frac: float, seed: int):
+def split_indices(n, frac, seed):
     rng = np.random.default_rng(seed)
     idx = rng.permutation(n)
     n1 = int(round(frac * n))
     return idx[:n1], idx[n1:]
 
 
-def split_folds(n: int, n_folds: int, seed: int):
+def split_folds(n, n_folds, seed):
     rng = np.random.default_rng(seed)
     idx = rng.permutation(n)
     return [fold for fold in np.array_split(idx, int(n_folds)) if len(fold) > 0]
@@ -92,7 +90,7 @@ class Sample:
         self.propensity = np.asarray(propensity, dtype=float).reshape(-1)
         self.mixture = mixture
 
-    def subset(self, idx: np.ndarray):
+    def subset(self, idx):
         return Sample(
             self.x[idx],
             self.a[idx],
@@ -103,7 +101,7 @@ class Sample:
             self.mixture,
         )
 
-    def split(self, train_fraction: float, seed: int):
+    def split(self, train_fraction, seed):
         train_idx, test_idx = split_indices(self.x.shape[0], train_fraction, seed)
         return self.subset(train_idx), self.subset(test_idx)
 
@@ -114,19 +112,19 @@ class Sample:
 
 
 def make_bimodal_shift(
-    n: int,
-    seed: int,
-    d: int = 5,
-    propensity_intercept: float = 0.10,
-    propensity_scale: float = 0.80,
-    left_weight_y0: float = 0.44,
-    center_weight_y0: float = 0.44,
-    left_weight_y1: float = 0.08,
-    center_weight_y1: float = 0.44,
-    side_location: float = 1.80,
-    left_sd: float = 0.34,
-    center_sd: float = 0.25,
-    right_sd: float = 0.34,
+    n,
+    seed,
+    d=5,
+    propensity_intercept=0.10,
+    propensity_scale=0.80,
+    left_weight_y0=0.44,
+    center_weight_y0=0.44,
+    left_weight_y1=0.08,
+    center_weight_y1=0.44,
+    side_location=1.80,
+    left_sd=0.34,
+    center_sd=0.25,
+    right_sd=0.34,
 ):
     """Two-dimensional potential-outcome mixture with confounded treatment."""
     rng = np.random.default_rng(seed)
@@ -165,7 +163,7 @@ def make_bimodal_shift(
 # -----------------------------------------------------------------------------
 
 
-def kernel_features(y: np.ndarray, locations: np.ndarray, kernel_scale: float):
+def kernel_features(y, locations, kernel_scale):
     """Gaussian kernel evaluations exp(-||y-v||^2/(2*kernel_scale))."""
     y = np.asarray(y, dtype=float)
     if y.ndim == 1:
@@ -177,7 +175,7 @@ def kernel_features(y: np.ndarray, locations: np.ndarray, kernel_scale: float):
     return np.exp(-0.5 * d2 / max(float(kernel_scale), 1e-8))
 
 
-def mixture_kernel_mean(locations: np.ndarray, weights: np.ndarray, means: np.ndarray, sds: np.ndarray, kernel_scale: float):
+def mixture_kernel_mean(locations, weights, means, sds, kernel_scale):
     """E[k(v,Y)] for a Gaussian mixture in R^2 and Gaussian outcome kernel."""
     loc = np.asarray(locations, dtype=float)
     if loc.ndim == 1:
@@ -198,7 +196,7 @@ def mixture_kernel_mean(locations: np.ndarray, weights: np.ndarray, means: np.nd
 
 
 class BasisParams:
-    def __init__(self, mean: np.ndarray, scale: np.ndarray, anchors: np.ndarray, anchor_bw: float, interaction_dim: int):
+    def __init__(self, mean, scale, anchors, anchor_bw, interaction_dim):
         self.mean = mean
         self.scale = scale
         self.anchors = anchors
@@ -206,7 +204,7 @@ class BasisParams:
         self.interaction_dim = interaction_dim
 
 
-def median_sq_distance(x: np.ndarray):
+def median_sq_distance(x):
     if len(x) < 2:
         return 1.0
     d2 = np.sum((x[:, None, :] - x[None, :, :]) ** 2, axis=2)
@@ -215,7 +213,7 @@ def median_sq_distance(x: np.ndarray):
     return float(np.median(vals)) if len(vals) else 1.0
 
 
-def fit_basis_parameters(x_train: np.ndarray, n_anchors: int, interaction_dim: int, seed: int):
+def fit_basis_parameters(x_train, n_anchors, interaction_dim, seed):
     x_train = np.asarray(x_train, dtype=float)
     mean = x_train.mean(axis=0)
     scale = np.where(x_train.std(axis=0) < 1e-6, 1.0, x_train.std(axis=0))
@@ -230,7 +228,7 @@ def fit_basis_parameters(x_train: np.ndarray, n_anchors: int, interaction_dim: i
     return BasisParams(mean, scale, anchors, anchor_bw, min(int(interaction_dim), xs.shape[1]))
 
 
-def build_design_matrix(x: np.ndarray, bp: BasisParams):
+def build_design_matrix(x, bp):
     x = np.asarray(x, dtype=float)
     xs = (x - bp.mean) / bp.scale
     pieces = [np.ones((len(x), 1)), xs, xs ** 2]
@@ -250,7 +248,7 @@ def build_design_matrix(x: np.ndarray, bp: BasisParams):
     return np.hstack(pieces)
 
 
-def fit_logistic_ridge(design: np.ndarray, a: np.ndarray, l2: float, max_iter: int = 100):
+def fit_logistic_ridge(design, a, l2, max_iter=100):
     beta = np.zeros(design.shape[1], dtype=float)
     penalty = np.ones_like(beta)
     penalty[0] = 0.0
@@ -269,7 +267,7 @@ def fit_logistic_ridge(design: np.ndarray, a: np.ndarray, l2: float, max_iter: i
     return beta
 
 
-def prepare_folds(sample: Sample, n_folds: int, seed: int, n_basis_anchors: int, interaction_dim: int, propensity_l2: float, regression_l2: float):
+def prepare_folds(sample, n_folds, seed, n_basis_anchors, interaction_dim, propensity_l2, regression_l2):
     """Prepare cross-fitting folds and precomputed ridge smoothers."""
     n = len(sample.a)
     folds = split_folds(n, n_folds, seed)
@@ -299,7 +297,7 @@ def prepare_folds(sample: Sample, n_folds: int, seed: int, n_basis_anchors: int,
     return prepared
 
 
-def crossfit_dr_all_locations(sample: Sample, locations: np.ndarray, kernel_scale: float, folds: List[Dict]):
+def crossfit_dr_all_locations(sample, locations, kernel_scale, folds):
     targets = kernel_features(sample.y, locations, kernel_scale)
     z = np.zeros((len(sample.a), targets.shape[1]), dtype=float)
     for fold in folds:
@@ -314,7 +312,7 @@ def crossfit_dr_all_locations(sample: Sample, locations: np.ndarray, kernel_scal
     return z
 
 
-def oracle_dr_all_locations(sample: Sample, locations: np.ndarray, kernel_scale: float):
+def oracle_dr_all_locations(sample, locations, kernel_scale):
     targets = kernel_features(sample.y, locations, kernel_scale)
     pi = sample.propensity[:, None]
     a = sample.a[:, None]
@@ -333,7 +331,7 @@ def oracle_dr_all_locations(sample: Sample, locations: np.ndarray, kernel_scale:
 # -----------------------------------------------------------------------------
 
 
-def score_grid_from_z(z_all: np.ndarray, n_grid: int, ridge: float):
+def score_grid_from_z(z_all, n_grid, ridge):
     fixed = z_all[:, 0]
     scores = np.empty(n_grid, dtype=float)
     best_idx = 0
@@ -347,7 +345,7 @@ def score_grid_from_z(z_all: np.ndarray, n_grid: int, ridge: float):
     return scores, int(best_idx), float(best_value)
 
 
-def compute_panel_grid(train: Sample, fixed_v1: np.ndarray, grid_points: np.ndarray, kernel_scale: float, nuisance: str, folds: List[Dict], ridge: float):
+def compute_panel_grid(train, fixed_v1, grid_points, kernel_scale, nuisance, folds, ridge):
     locations = np.vstack([fixed_v1[None, :], grid_points])
     if nuisance == "estimated":
         z_all = crossfit_dr_all_locations(train, locations, kernel_scale, folds)
@@ -364,7 +362,7 @@ def compute_panel_grid(train: Sample, fixed_v1: np.ndarray, grid_points: np.ndar
 # -----------------------------------------------------------------------------
 
 
-def make_figure(args: argparse.Namespace):
+def make_figure(args):
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
@@ -505,9 +503,9 @@ def make_figure(args: argparse.Namespace):
         ax.set_title(res["title"], fontsize=args.title_fontsize, pad=1.0)
         ax.set_xlim(args.xmin, args.xmax)
         ax.set_ylim(args.ymin, args.ymax)
-        ax.set_xlabel(r"$v_{2,1}$", fontsize=args.label_fontsize)
+        ax.set_xlabel(r"$v_{2,1}$", fontsize=args.label_fontsize, labelpad=-2.5)
         ax.tick_params(labelsize=args.tick_fontsize)
-        ax.set_aspect("equal", adjustable="box")
+        ax.set_aspect("equal", adjustable="box", anchor="S")
 
     axes[0].set_ylabel(r"$v_{2,2}$", fontsize=args.label_fontsize)
 
@@ -519,29 +517,31 @@ def make_figure(args: argparse.Namespace):
         Line2D([0], [0], marker="D", linestyle="", markerfacecolor="none", markeredgecolor="#7b3294", color="#7b3294", label=r"Oracle $\hat v_{2,or}^\star$", markersize=7),
     ]
 
-    fig.legend(
-        handles=handles,
-        loc="upper center",
-        ncol=5,
-        frameon=True,
-        fontsize=args.legend_fontsize,
-        bbox_to_anchor=(0.5, 0.962),
-        handletextpad=0.35,
-        columnspacing=0.78,
-        borderpad=0.22,
-        borderaxespad=0.0,
-    )
+    fig.subplots_adjust(left=0.07, right=0.89, bottom=0.012, top=0.94, wspace=0.08)
 
-    fig.subplots_adjust(left=0.07, right=0.89, bottom=0.12, top=0.915, wspace=0.08)
-    cax = fig.add_axes([0.905, 0.14, 0.018, 0.69])
-    cb = fig.colorbar(contour_obj, cax=cax)
+    right_pos = axes[1].get_position()
+    cax = fig.add_axes([right_pos.x1 + 0.015, right_pos.y0 + 0.012, 0.018, right_pos.height * 0.955])
+    cb = fig.colorbar(contour_obj, cax=cax, extendfrac=0.016)
     cb.set_label(r"Training objective $\widehat{\lambda}^{tr}(v_1,v_2)$", fontsize=args.colorbar_fontsize)
     cb.ax.tick_params(labelsize=args.tick_fontsize)
 
+    fig.legend(
+        handles=handles,
+        loc="lower center",
+        ncol=5,
+        frameon=True,
+        fontsize=args.legend_fontsize,
+        bbox_to_anchor=(0.5, -0.14),
+        handletextpad=0.35,
+        columnspacing=0.68,
+        borderpad=0.12,
+        borderaxespad=0.0,
+    )
+
     png_path = outdir / args.output_png
     pdf_path = outdir / args.output_pdf
-    fig.savefig(png_path, dpi=args.dpi, bbox_inches="tight", pad_inches=0.02)
-    fig.savefig(pdf_path, bbox_inches="tight", pad_inches=0.02)
+    fig.savefig(png_path, dpi=args.dpi, bbox_inches="tight", pad_inches=0.005)
+    fig.savefig(pdf_path, bbox_inches="tight", pad_inches=0.005)
     plt.close(fig)
 
     meta = {
@@ -566,9 +566,6 @@ def make_figure(args: argparse.Namespace):
         "outputs": {"png": str(png_path), "pdf": str(pdf_path)},
     }
 
-    with open(outdir / args.output_json, "w") as f:
-        json.dump(meta, f, indent=2, default=str)
-
     print(json.dumps(meta, indent=2, default=str))
     return meta
 
@@ -584,7 +581,6 @@ def parse_args():
     p.add_argument("--outdir", type=Path, default=results_dir("contour"))
     p.add_argument("--output-png", type=str, default="contour_estimated_with_oracle_v2_overlay_tight.png")
     p.add_argument("--output-pdf", type=str, default="contour_estimated_with_oracle_v2_overlay_tight.pdf")
-    p.add_argument("--output-json", type=str, default="contour_estimated_with_oracle_v2_overlay_metadata.json")
 
     p.add_argument("--n", type=int, default=2500)
     p.add_argument("--train-fraction", type=float, default=0.55)

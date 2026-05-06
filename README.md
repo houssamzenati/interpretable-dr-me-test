@@ -1,63 +1,59 @@
 # interpretable-dr-me-test
 
-Code for the finite-location causal witness experiments in the paper
+This repository contains the experiment code for the paper
 *Semiparametrically Efficient Local Testing for Interpretable Distributional Treatment Effects*.
 
-The repo is organized around a small set of runnable scripts. The scalar-outcome
-core lives in `exp1_calibration_dr_me_plugin.py`, and later experiments reuse
-that implementation.
+The code is script-driven on purpose. `exp1_calibration_dr_me_plugin.py` is the
+main scalar DR-ME implementation, and the later experiments either reuse it
+directly or stay close to the same setup.
 
-## What is here
+## Repository layout
 
-- `contour_estimated_oracle.py`
-  Causal contour diagnostic comparing the feasible DR objective to the oracle one.
+The main scripts are:
+
 - `exp1_calibration_dr_me_plugin.py`
-  Calibration under a confounded observational null.
+  Confounded sharp-null calibration for DR-ME and its baselines.
 - `exp2_power_exp1_extension.py`
-  Power study and DR-xKTE comparison.
+  Power experiment with an equal-in-law null and DR-xKTE as the global
+  comparison.
 - `exp3_hd_whitening_ablation.py`
-  High-dimensional whitening ablation.
+  High-dimensional outcome ablation for location learning.
 - `exp4_local_chisq.py`
-  Local noncentral chi-square validation.
+  Local noncentral chi-square validation for fixed locations.
 - `exp5_runtime_drkte_compare.py`
-  Runtime comparison against DR-xKTE.
-- `octmnist_causal_vstar.py`
-  OCTMNIST causal-location illustration.
-- `octmnist_mean_matched_vstar.py`
-  OCTMNIST mean-matched residual illustration.
+  Runtime comparison between finite-location DR-ME variants and DR-xKTE.
+- `contour_estimated_oracle.py`
+  Contour diagnostic for the DR-ME training objective.
+- `octmnist_location_learning.py`
+  Residual-based OCTMNIST illustration.
 - `octmnist_utils.py`
-  Shared OCTMNIST download, loading, normalization, and image helpers.
+  Shared OCTMNIST loading and image helpers.
 - `repo_paths.py`
-  Canonical output folders for all experiments.
+  Default output folders.
 
-## Output layout
+## Outputs
 
-Every script now defaults to a subfolder inside:
+By default, each script writes into a subfolder of `results/`. The main outputs
+are figures, paper-ready `.tex` tables, and a few zip bundles for the OCTMNIST
+figures. 
 
-```text
-results/
-```
+The paper-facing LaTeX tables are generated directly by the experiment scripts:
 
-The main destinations are:
+- `results/exp1/tab_exp1_calibration.tex`
+- `results/exp2/tab_power_odrme_drxkte.tex`
+- `results/exp2/tab_power_diagnostics_nmax.tex`
+- `results/exp3/tab_exp_hd_null.tex`
+- `results/exp3/tab_exp_hd_power.tex`
+- `results/exp3/tab_exp_hd_selection.tex`
+- `results/exp4/tab_exp4_local_power.tex`
+- `results/exp5/tab_runtime_total_drkte.tex`
+- `results/exp5/tab_runtime_core_drkte.tex`
 
-```text
-results/
-  contour/
-  exp1/
-  exp2/
-  exp3/
-  exp4/
-  exp5/
-  octmnist_causal/
-  octmnist_mean_matched/
-```
-
-You can still override `--outdir` manually, but the defaults are meant to keep
-the repo root clean.
+You can still override `--outdir` if you want to send a run somewhere else.
 
 ## Dependencies
 
-The scripts use a lightweight scientific Python stack:
+The code uses a small scientific Python stack:
 
 - `numpy`
 - `scipy`
@@ -65,20 +61,18 @@ The scripts use a lightweight scientific Python stack:
 - `matplotlib`
 - `scikit-learn`
 
-No heavy causal inference package is required. The OCTMNIST scripts download the
-dataset directly and cache it under `octmnist_cache/`.
+The OCTMNIST scripts download the dataset on demand and cache it under
+`octmnist_cache/`.
 
-## Reproducing the main runs
+## Main commands
 
-### Contour diagnostic
+### Contour figure
 
 ```bash
 python contour_estimated_oracle.py
 ```
 
-This writes to `results/contour/` by default.
-
-### Experiment 1: calibration
+### Experiment 1
 
 ```bash
 python exp1_calibration_dr_me_plugin.py \
@@ -88,7 +82,7 @@ python exp1_calibration_dr_me_plugin.py \
   --M 80
 ```
 
-### Experiment 2: power and DR-xKTE
+### Experiment 2
 
 ```bash
 export OMP_NUM_THREADS=1
@@ -102,7 +96,7 @@ python exp2_power_exp1_extension.py \
   --n-jobs 12
 ```
 
-### Experiment 3: high-dimensional whitening ablation
+### Experiment 3
 
 ```bash
 export OMP_NUM_THREADS=1
@@ -114,7 +108,7 @@ python exp3_hd_whitening_ablation.py \
   --n-reps 200 \
   --n-fixed 3000 \
   --d-grid 5 10 25 50 \
-  --settings two_bump \
+  --settings null two_bump \
   --J 3 \
   --M 300 \
   --effect 4.0 \
@@ -123,7 +117,7 @@ python exp3_hd_whitening_ablation.py \
   --n-jobs 8
 ```
 
-### Experiment 4: local chi-square validation
+### Experiment 4
 
 ```bash
 python exp4_local_chisq.py \
@@ -135,7 +129,7 @@ python exp4_local_chisq.py \
   --J 2
 ```
 
-### Experiment 5: runtime comparison
+### Experiment 5
 
 ```bash
 python exp5_runtime_drkte_compare.py \
@@ -146,38 +140,10 @@ python exp5_runtime_drkte_compare.py \
   --grad-steps 3
 ```
 
-### OCTMNIST figure scripts
+### OCTMNIST figures
 
 ```bash
-python octmnist_mean_matched_vstar.py
+python octmnist_location_learning.py
 ```
 
-## Notes on the implementation
 
-- `exp1` is the scalar-outcome reference implementation:
-  propensity fitting, plug-in kernel regressions, DR pseudo-features, finite-location learning, and Hotelling testing all live there.
-- `exp2` and `exp3` deliberately build on `exp1` so the power and ablation studies use the same core DR machinery.
-- `exp5` keeps a separate runtime-oriented implementation because the point of that script is timing the end-to-end methods, not only reproducing the same rejection decisions.
-- The OCTMNIST scripts share their dataset and image I/O code through `octmnist_utils.py`.
-
-## Quick smoke runs
-
-If you just want to check that everything works, lower the repetition count:
-
-```bash
-python exp1_calibration_dr_me_plugin.py --n-reps 10 --n-grid 300 600
-python exp2_power_exp1_extension.py --n-reps 10 --n-grid 300 600 --n-jobs 1
-python exp3_hd_whitening_ablation.py --mode dim_sweep --n-reps 10 --n-fixed 1200 --d-grid 5 10 --n-jobs 1
-python exp4_local_chisq.py --n-reps 200 --n-values 500 --h-values 0 2 4
-python exp5_runtime_drkte_compare.py --reps 2 --n-grid 300 600
-```
-
-## Typical artifacts
-
-Depending on the script, you should expect:
-
-- raw Monte Carlo CSVs
-- summarized CSV tables
-- paper-facing PNG figures
-- metadata JSON files
-- small packaged zip bundles for figure scripts

@@ -2,7 +2,6 @@
 """OCTMNIST residual-location figure."""
 
 import argparse
-import json
 import math
 import zipfile
 from pathlib import Path
@@ -113,7 +112,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--source-path", type=str, default=None, help="Path to octmnist.npz. If omitted, download from Zenodo.")
     parser.add_argument("--data-home", type=str, default=str(OCTMNIST_CACHE))
-    parser.add_argument("--outdir", type=str, default=str(results_dir("octmnist_mean_matched")))
+    parser.add_argument("--outdir", type=str, default=str(results_dir("octmnist_results")))
     parser.add_argument("--n", type=int, default=1500)
     parser.add_argument("--seed", type=int, default=11)
     parser.add_argument("--steps", type=int, default=80)
@@ -187,10 +186,6 @@ def main():
 
     R = np.where(A[:, None, None] == 1, R1, R0)
     Y = np.where(A[:, None, None] == 1, Y1, Y0)
-    observed_resid_a0 = R[A == 0].mean(axis=0)
-    observed_resid_a1 = R[A == 1].mean(axis=0)
-    mean_resid_diff_all = observed_resid_a1 - observed_resid_a0
-
     perm = rng.permutation(n)
     n_eta = int(0.35 * n)
     n_train = int(0.40 * n)
@@ -228,6 +223,10 @@ def main():
     R_eta1 = R_eta_flat[arm1_eta]
     R_train_flat = R_train.reshape(len(R_train), -1)
     R_test_flat = R_test.reshape(len(R_test), -1)
+
+    observed_resid_train_a0 = R_train[A_train == 0].mean(axis=0)
+    observed_resid_train_a1 = R_train[A_train == 1].mean(axis=0)
+    mean_resid_diff_train = observed_resid_train_a1 - observed_resid_train_a0
 
     p = R_train_flat.shape[1]
     beta2 = p * args.ell**2
@@ -277,9 +276,9 @@ def main():
     def test_info(v):
         return score_block(v, R_test_flat, A_test, pi_hat_test, H0_test, H1_test, need_grad=False)[1]
 
-    # Always initialize from the observed residual mean difference, as requested.
-    v_init = mean_resid_diff_all.copy()
-    init_label = "all-data mean residual difference"
+    # Initialize from the observed residual mean difference on I_tr only.
+    v_init = mean_resid_diff_train.copy()
+    init_label = "training-split mean residual difference"
     init_train_score = float(train_score(v_init))
     init_test_score = float(test_info(v_init)["score"])
 
@@ -327,7 +326,7 @@ def main():
     residual_vmax = max(
         float(np.abs(theta * M).max()),
         float(np.abs(v_star).max()),
-        float(np.abs(mean_resid_diff_all).max()),
+        float(np.abs(mean_resid_diff_train).max()),
         float(np.abs(example_control).max()),
         float(np.abs(example_severe).max()),
         1e-6,
@@ -346,7 +345,7 @@ def main():
     show(axes[1], sample_y1, "Sample $Y(1)$", vmin=0.0, vmax=1.0)
     show(
         axes[2],
-        mean_resid_diff_all,
+        mean_resid_diff_train,
         "Observed residual mean diff",
         cmap="coolwarm",
         vmin=-residual_vmax,
@@ -372,7 +371,7 @@ def main():
     show(axs[1], sample_y1, "Sample $Y(1)$", vmin=0.0, vmax=1.0)
     show(axs[2], example_control, "Sample $R(0)$: mild", cmap="coolwarm", vmin=-residual_vmax, vmax=residual_vmax)
     show(axs[3], example_severe, "Sample $R(1)$: severe", cmap="coolwarm", vmin=-residual_vmax, vmax=residual_vmax)
-    show(axs[4], mean_resid_diff_all, "Observed residual mean diff", cmap="coolwarm", vmin=-residual_vmax, vmax=residual_vmax)
+    show(axs[4], mean_resid_diff_train, "Observed residual mean diff", cmap="coolwarm", vmin=-residual_vmax, vmax=residual_vmax)
     show(axs[5], oracle_resid_diff, "Oracle residual mean diff", cmap="coolwarm", vmin=-residual_vmax, vmax=residual_vmax)
     show(axs[6], v_init, "Mean residual difference init", cmap="coolwarm", vmin=-residual_vmax, vmax=residual_vmax)
     show(
@@ -414,14 +413,10 @@ def main():
         "vstar_train_mean_z": float(vstar_train["mean_z"]),
         "vstar_test_mean_z": float(vstar_test["mean_z"]),
         "oracle_mean_diff_l2": float(np.linalg.norm((oracle_R1_mean - oracle_R0_mean).reshape(-1))),
-        "observed_resid_diff_l2": float(np.linalg.norm(mean_resid_diff_all.reshape(-1))),
+        "observed_resid_diff_l2": float(np.linalg.norm(mean_resid_diff_train.reshape(-1))),
+        "observed_train_resid_diff_l2": float(np.linalg.norm(mean_resid_diff_train.reshape(-1))),
         **mask_info,
     }
-    with open(outdir / "octmnist_mean_matched_metadata.json", "w") as f:
-        json.dump(metadata, f, indent=2)
-    with open(outdir / "octmnist_mean_matched_history.json", "w") as f:
-        json.dump(history, f, indent=2)
-
     # Package outputs.
     package_path = outdir / "octmnist_mean_matched_package.zip"
     with zipfile.ZipFile(package_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -431,8 +426,6 @@ def main():
             "octmnist_mean_matched_appendix_panel.png",
             "octmnist_mean_matched_vstar.png",
             "octmnist_mean_matched_init.png",
-            "octmnist_mean_matched_metadata.json",
-            "octmnist_mean_matched_history.json",
             "octmnist_mean_matched_vstar.npy",
         ]:
             zf.write(outdir / filename, arcname=f"results/{filename}")
@@ -442,10 +435,9 @@ def main():
     print(appendix_panel_path)
     print(vstar_path)
     print(init_path)
-    print(outdir / "octmnist_mean_matched_metadata.json")
     print(package_path)
     print("Metadata:")
-    print(json.dumps(metadata, indent=2))
+    print(metadata)
 
 
 if __name__ == "__main__":

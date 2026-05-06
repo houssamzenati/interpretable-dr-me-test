@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
-Experiment 1: calibration under a confounded observational causal null.
+Experiment 1: calibration under a confounded observational sharp null.
 
 Null DGP:
     X ~ N(0, I_p)
     A | X ~ Bernoulli(pi0(X))
     Y(0) = Y(1) = g(X) + eps
 
-The interventional laws are equal, but the observed treated/control outcome
-laws differ because treatment is confounded by X.
+This is a sharp null: each unit has the same potential outcome under treatment
+and control. The interventional laws are equal, but the observed
+treated/control outcome laws differ because treatment is confounded by X.
 
 Default methods:
     DR-ME split       : AIPW/DR finite-location ME with plug-in pi_hat and m_hat_a.
@@ -37,12 +38,12 @@ import os
 import time
 from dataclasses import dataclass
 from multiprocessing import Pool, cpu_count
-from typing import Dict, List, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
 from scipy.special import expit
 from scipy.stats import chi2, f, kstest
+from latex_tables import tex_float, write_booktabs_table
 from repo_paths import results_dir
 
 
@@ -50,7 +51,7 @@ from repo_paths import results_dir
 # DGP
 # ---------------------------------------------------------------------
 
-def prognostic_g(X: np.ndarray):
+def prognostic_g(X):
     """Nonlinear prognostic function g(X). X must have at least 5 columns."""
     return (
         0.90 * X[:, 0]
@@ -61,17 +62,17 @@ def prognostic_g(X: np.ndarray):
     )
 
 
-def true_propensity(X: np.ndarray):
+def true_propensity(X):
     """True pi0(X)=P(A=1|X), clipped to enforce overlap."""
     lin = 0.90 * X[:, 0] - 0.75 * X[:, 1] + 0.55 * X[:, 2] - 0.40 * X[:, 3]
     return np.clip(expit(lin), 0.06, 0.94)
 
 
 def simulate_confounded_null(
-    n: int,
-    seed: int,
-    p: int = 5,
-    sigma_y: float = 1.0,
+    n,
+    seed,
+    p=5,
+    sigma_y=1.0,
 ):
     """Generate one observational sample under Y(0)=Y(1)."""
     rng = np.random.default_rng(seed)
@@ -86,7 +87,7 @@ def simulate_confounded_null(
 # Kernels and utility functions
 # ---------------------------------------------------------------------
 
-def squared_distances(A: np.ndarray, B: np.ndarray):
+def squared_distances(A, B):
     A = np.asarray(A, dtype=float)
     B = np.asarray(B, dtype=float)
     AA = np.sum(A * A, axis=1)[:, None]
@@ -95,15 +96,15 @@ def squared_distances(A: np.ndarray, B: np.ndarray):
     return np.maximum(D2, 0.0)
 
 
-def gaussian_kernel_y(Y: np.ndarray, C: np.ndarray, ell_y: float):
+def gaussian_kernel_y(Y, C, ell_y):
     gamma_y = 1.0 / (2.0 * ell_y * ell_y)
     return np.exp(-gamma_y * squared_distances(Y, C))
 
 
 def median_bandwidth_y(
-    Y: np.ndarray,
-    rng: np.random.Generator,
-    max_points: int = 512,
+    Y,
+    rng,
+    max_points=512,
 ):
     Y = np.asarray(Y, dtype=float).reshape(len(Y), -1)
     n = len(Y)
@@ -120,7 +121,7 @@ def median_bandwidth_y(
     return float(max(np.median(vals), 1e-3))
 
 
-def make_dictionary(Y: np.ndarray, M: int, lo_q: float = 0.02, hi_q: float = 0.98):
+def make_dictionary(Y, M, lo_q=0.02, hi_q=0.98):
     """Quantile-range grid dictionary for scalar outcomes."""
     y = np.asarray(Y).ravel()
     lo, hi = np.quantile(y, [lo_q, hi_q])
@@ -130,7 +131,7 @@ def make_dictionary(Y: np.ndarray, M: int, lo_q: float = 0.02, hi_q: float = 0.9
     return np.linspace(lo, hi, M).reshape(-1, 1)
 
 
-def basis_features(X: np.ndarray, mode: str = "rich"):
+def basis_features(X, mode="rich"):
     """Feature map for laptop-scale multi-output regression of m_a(x;C)."""
     X = np.asarray(X, dtype=float)
     n, p = X.shape
@@ -148,9 +149,9 @@ def basis_features(X: np.ndarray, mode: str = "rich"):
 
 
 def add_intercept_and_standardize(
-    Phi: np.ndarray,
-    mean: np.ndarray | None = None,
-    scale: np.ndarray | None = None,
+    Phi,
+    mean=None,
+    scale=None,
 ):
     if mean is None:
         mean = Phi.mean(axis=0, keepdims=True)
@@ -167,11 +168,11 @@ def add_intercept_and_standardize(
 # ---------------------------------------------------------------------
 
 def fit_logistic_irls(
-    X: np.ndarray,
-    y: np.ndarray,
-    l2: float = 1e-2,
-    max_iter: int = 50,
-    tol: float = 1e-8,
+    X,
+    y,
+    l2=1e-2,
+    max_iter=50,
+    tol=1e-8,
 ):
     """Small ridge-logistic IRLS solver. Intercept is not penalized."""
     Phi0 = X.astype(float)
@@ -199,7 +200,7 @@ def fit_logistic_irls(
     return {"beta": beta, "mean": mean, "scale": scale}
 
 
-def predict_logistic(model: Dict[str, np.ndarray], X: np.ndarray):
+def predict_logistic(model, X):
     Phi, _, _ = add_intercept_and_standardize(X.astype(float), model["mean"], model["scale"])
     return expit(Phi @ model["beta"])
 
@@ -212,7 +213,7 @@ class PluginNuisance:
     pi_clip: float = 0.05
     basis_mode: str = "rich"
 
-    def fit(self, X_eta: np.ndarray, A_eta: np.ndarray, Y_eta: np.ndarray, C: np.ndarray):
+    def fit(self, X_eta, A_eta, Y_eta, C):
         self.C = np.asarray(C, dtype=float)
 
         self.pi_model = fit_logistic_irls(X_eta, A_eta.astype(float), l2=self.pi_l2)
@@ -220,9 +221,9 @@ class PluginNuisance:
         Phi_raw = basis_features(X_eta, mode=self.basis_mode)
         Phi_all, self.phi_mean, self.phi_scale = add_intercept_and_standardize(Phi_raw)
 
-        self.m_coef: Dict[int, np.ndarray] = {}
-        self.arm_counts: Dict[int, int] = {}
-        self.arm_mean_targets: Dict[int, np.ndarray] = {}
+        self.m_coef = {}
+        self.arm_counts = {}
+        self.arm_mean_targets = {}
 
         for a in (0, 1):
             mask = A_eta == a
@@ -247,11 +248,11 @@ class PluginNuisance:
 
         return self
 
-    def predict_pi(self, X: np.ndarray):
+    def predict_pi(self, X):
         p = predict_logistic(self.pi_model, X)
         return np.clip(p, self.pi_clip, 1.0 - self.pi_clip)
 
-    def predict_m(self, X: np.ndarray, a: int):
+    def predict_m(self, X, a):
         Phi_raw = basis_features(X, mode=self.basis_mode)
         Phi, _, _ = add_intercept_and_standardize(Phi_raw, self.phi_mean, self.phi_scale)
         pred = Phi @ self.m_coef[a]
@@ -265,14 +266,14 @@ class PluginNuisance:
 # ---------------------------------------------------------------------
 
 def pseudo_feature_matrix(
-    method: str,
-    X: np.ndarray,
-    A: np.ndarray,
-    Y: np.ndarray,
-    C: np.ndarray,
-    ell_y: float,
-    nuis: PluginNuisance,
-    p_global: float | None = None,
+    method,
+    X,
+    A,
+    Y,
+    C,
+    ell_y,
+    nuis,
+    p_global=None,
 ):
     """Return n x M matrix of finite-location pseudo-features."""
     KYC = gaussian_kernel_y(Y, C, ell_y)
@@ -302,7 +303,7 @@ def pseudo_feature_matrix(
     raise ValueError(f"Unknown method: {method}")
 
 
-def mean_cov(Z: np.ndarray):
+def mean_cov(Z):
     Z = np.asarray(Z, dtype=float)
     if Z.ndim == 1:
         Z = Z.reshape(-1, 1)
@@ -314,10 +315,10 @@ def mean_cov(Z: np.ndarray):
 
 
 def hotelling_pvalue(
-    Z: np.ndarray,
-    cols: Sequence[int],
-    ridge: float = 1e-8,
-    pvalue: str = "chi2",
+    Z,
+    cols,
+    ridge=1e-8,
+    pvalue="chi2",
 ):
     Zs = Z[:, list(cols)]
     if Zs.ndim == 1:
@@ -341,7 +342,7 @@ def hotelling_pvalue(
     return stat, p
 
 
-def learning_criterion(Z: np.ndarray, cols: Sequence[int], tau: float):
+def learning_criterion(Z, cols, tau):
     Zs = Z[:, list(cols)]
     if Zs.ndim == 1:
         Zs = Zs.reshape(-1, 1)
@@ -351,14 +352,14 @@ def learning_criterion(Z: np.ndarray, cols: Sequence[int], tau: float):
     return float(mu @ inv @ mu)
 
 
-def greedy_select(Z_train: np.ndarray, J: int, tau: float):
+def greedy_select(Z_train, J, tau):
     """Greedy forward selection over dictionary columns.
 
     The default experiment uses J=2. For that case the second greedy step is
     vectorized, which keeps the 200-seed calibration run laptop-scale.
     """
     M = Z_train.shape[1]
-    selected: List[int] = []
+    selected = []
     available = set(range(M))
 
     mu = Z_train.mean(axis=0)
@@ -406,17 +407,17 @@ def greedy_select(Z_train: np.ndarray, J: int, tau: float):
 # ---------------------------------------------------------------------
 
 def run_one(
-    n: int,
-    seed: int,
-    J: int,
-    M: int,
-    sigma_y: float,
-    tau: float,
-    ridge: float,
-    ridge_alpha: float,
-    pi_l2: float,
-    pvalue: str,
-    basis_mode: str,
+    n,
+    seed,
+    J,
+    M,
+    sigma_y,
+    tau,
+    ridge,
+    ridge_alpha,
+    pi_l2,
+    pvalue,
+    basis_mode,
 ):
     rng = np.random.default_rng(seed)
     X, A, Y = simulate_confounded_null(n=n, seed=seed, sigma_y=sigma_y)
@@ -455,7 +456,7 @@ def run_one(
     Ztr_naive = pseudo_feature_matrix("naive", X[idx_tr], A[idx_tr], Y[idx_tr], C_tr, ell_y, nuis, p_global=p_global)
     Zte_naive = pseudo_feature_matrix("naive", X[idx_te], A[idx_te], Y[idx_te], C_tr, ell_y, nuis, p_global=p_global)
 
-    out: Dict[str, float] = {
+    out = {
         "n": n,
         "seed": seed,
         "J": J,
@@ -532,8 +533,17 @@ METHOD_LABELS = {
     "p_dr_nosplit": "DR-ME no split",
 }
 
+PAPER_METHOD_LABELS = [
+    ("DR-ME split", "ODR-ME"),
+    ("DR-ME random", "ODR-ME-Rand"),
+    ("IPW-ME plug-in", "IPW-ME plug-in"),
+    ("DM-ME plug-in", "DM-ME plug-in"),
+    ("Naive observed ME", "Naive observed ME"),
+    ("DR-ME no split", "ODR-ME-NoSplit"),
+]
 
-def summarize(df: pd.DataFrame, alpha: float):
+
+def summarize(df, alpha):
     rows = []
     for n, dfn in df.groupby("n"):
         B = len(dfn)
@@ -570,7 +580,7 @@ def summarize(df: pd.DataFrame, alpha: float):
     return pd.DataFrame(rows)
 
 
-def plot_summary(summary: pd.DataFrame, outpath: str, alpha: float):
+def plot_summary(summary, outpath, alpha):
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots(figsize=(8.4, 5.0))
@@ -604,6 +614,38 @@ def plot_summary(summary: pd.DataFrame, outpath: str, alpha: float):
     fig.tight_layout()
     fig.savefig(outpath, dpi=200)
     plt.close(fig)
+
+
+def export_tex_tables(summary, outdir):
+    n_values = sorted(int(n) for n in summary["n"].unique())
+    by_method = {
+        method: df.set_index("n")["rejection_rate"]
+        for method, df in summary.groupby("method")
+    }
+
+    lines = [
+        "Method & " + " & ".join(f"$n={n}$" for n in n_values) + r" \\",
+        r"\midrule",
+    ]
+    for internal_name, paper_name in PAPER_METHOD_LABELS:
+        row = [paper_name]
+        series = by_method.get(internal_name)
+        for n in n_values:
+            value = series.get(n) if series is not None else None
+            row.append(tex_float(value))
+        lines.append(" & ".join(row) + r" \\")
+
+    path = os.path.join(outdir, "tab_exp1_calibration.tex")
+    write_booktabs_table(
+        path,
+        "l" + "c" * len(n_values),
+        lines,
+        "Empirical rejection rates under the confounded observational null. "
+        "The target interventional laws are equal, $P_{Y(0)}=P_{Y(1)}$, but the observed "
+        "treated and control outcome distributions differ because of confounding.",
+        "tab:exp1_calibration",
+    )
+    return [path]
 
 
 def parse_args():
@@ -670,15 +712,10 @@ def main():
                     print(f"completed {k}/{len(tasks)} runs", flush=True)
 
     df = pd.DataFrame(records)
-    raw_path = os.path.join(args.outdir, "exp1_raw_pvalues.csv")
-    df.to_csv(raw_path, index=False)
-
     summary = summarize(df, alpha=args.alpha)
-    summary_path = os.path.join(args.outdir, "exp1_calibration_summary.csv")
-    summary.to_csv(summary_path, index=False)
-
     plot_path = os.path.join(args.outdir, "exp1_calibration_plot.png")
     plot_summary(summary, plot_path, alpha=args.alpha)
+    tex_paths = export_tex_tables(summary, args.outdir)
 
     print("\nCalibration summary:")
     shown = summary[
@@ -699,9 +736,10 @@ def main():
     pd.set_option("display.max_rows", 300)
     pd.set_option("display.width", 180)
     print(shown.to_string(index=False))
-    print(f"\nWrote: {raw_path}")
-    print(f"Wrote: {summary_path}")
+    print()
     print(f"Wrote: {plot_path}")
+    for tex_path in tex_paths:
+        print(f"Wrote: {tex_path}")
     print(f"Elapsed: {time.time() - t0:.1f} seconds")
 
 
