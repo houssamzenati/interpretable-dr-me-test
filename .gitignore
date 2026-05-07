@@ -48,6 +48,7 @@ pip-wheel-metadata/
 # Local matplotlib/font caches
 .matplotlib/
 .cache/
+.fontconfig-cache/
 
 # Experiment caches and generated data
 octmnist_cache/
@@ -57,4 +58,3 @@ results/
 *.log
 *.tmp
 *.temp
-
