@@ -24,6 +24,8 @@ The main scripts are:
   Runtime comparison between finite-location DR-ME variants and DR-xKTE.
 - `contour_estimated_oracle.py`
   Contour diagnostic for the DR-ME training objective.
+- `illustrate_dr_me_locations.py`
+  Teaching figures separating prototype similarity from joint location learning.
 - `octmnist_location_learning.py`
   Residual-based OCTMNIST illustration.
 - `octmnist_utils.py`
@@ -71,6 +73,21 @@ The OCTMNIST scripts download the dataset on demand and cache it under
 ```bash
 python contour_estimated_oracle.py
 ```
+
+### Prototype and location-learning explanation
+
+```bash
+python illustrate_dr_me_locations.py --gif
+python -m unittest -v test_illustrate_dr_me_locations.py
+```
+
+The new script reuses the original contour experiment. It produces a prototype
+similarity figure, two location-learning scenarios, and six progressive reveals
+in `results/location_explainer/`, with PDF/PNG outputs and saved numerical data.
+Only NumPy and Matplotlib are required; the optional GIF also requires Pillow.
+The original generator is unchanged. See [the figure notes](location_visuals_notes.md)
+for provenance, suggested talk placement, and the distinction between the witness
+and the covariance-normalised training criterion.
 
 ### Experiment 1
 
@@ -145,5 +162,3 @@ python exp5_runtime_drkte_compare.py \
 ```bash
 python octmnist_location_learning.py
 ```
-
-
